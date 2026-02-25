@@ -1,0 +1,5 @@
+{
+  "name": "MotivaTask AI",
+  "description": "Uma assistente motivadora e engraçada que cria suas tarefas por voz em tempo real.",
+  "requestFramePermissions": ["microphone"]
+}
