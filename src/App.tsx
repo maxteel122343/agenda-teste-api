@@ -9,7 +9,8 @@ import {
   Sparkles, 
   CheckCircle2,
   Volume2,
-  AlertCircle
+  AlertCircle,
+  MessageSquare
 } from 'lucide-react';
 import { Stage, Layer, Rect, Text, Group } from 'react-konva';
 import { GoogleGenAI, Modality, Type } from "@google/genai";
@@ -17,6 +18,7 @@ import { Task } from './types';
 import { AudioService } from './services/audioService';
 import { cn } from './lib/utils';
 import Konva from 'konva';
+import ChatWindow from './components/ChatWindow';
 
 const SYSTEM_INSTRUCTION = `Você é a "Motiva", uma assistente de produtividade extremamente engraçada, sarcástica e motivadora. 
 Sua voz deve soar feminina e cheia de energia. 
@@ -36,6 +38,7 @@ export default function App() {
   const [stageX, setStageX] = useState(0);
   const [stageY, setStageY] = useState(0);
   const stageRef = useRef<Konva.Stage>(null);
+  const [isChatOpen, setIsChatOpen] = useState(false);
 
   const handleWheel = (e: Konva.KonvaEventObject<WheelEvent>) => {
     e.evt.preventDefault();
@@ -218,6 +221,14 @@ export default function App() {
               </span>
             )}
           </button>
+
+          <button
+            onClick={() => setIsChatOpen(true)}
+            className="relative flex items-center gap-3 px-6 py-3 rounded-full font-medium transition-all duration-300 shadow-sm bg-slate-900 text-white hover:bg-slate-800"
+          >
+            <MessageSquare className="w-5 h-5" />
+            <span>Chat</span>
+          </button>
         </div>
       </header>
 
@@ -336,6 +347,16 @@ export default function App() {
               <span className="text-sm font-medium">Conversa Ativa com Motiva</span>
             </div>
           </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {isChatOpen && (
+          <ChatWindow 
+            isOpen={isChatOpen} 
+            onClose={() => setIsChatOpen(false)}
+            systemInstruction={SYSTEM_INSTRUCTION}
+          />
         )}
       </AnimatePresence>
     </div>
