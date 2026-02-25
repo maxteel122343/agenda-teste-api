@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback, Component, ErrorInfo, ReactNode } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Mic, 
@@ -9,97 +9,55 @@ import {
   Sparkles, 
   CheckCircle2,
   Volume2,
-  Settings,
-  Tag,
-  Palette,
-  Pencil,
-  FileText,
-  Calendar,
-  Monitor,
-  Circle,
-  Video,
-  Layout,
-  Search,
-  ChevronRight,
-  Maximize2,
-  Share2,
-  Heart,
-  Square,
-  MessageSquare,
-  List,
-  LogOut,
-  User,
-  ZoomIn,
-  ZoomOut,
-  AlertTriangle,
   AlertCircle
 } from 'lucide-react';
+import { Stage, Layer, Rect, Text, Group } from 'react-konva';
 import { GoogleGenAI, Modality, Type } from "@google/genai";
 import { Task } from './types';
 import { AudioService } from './services/audioService';
 import { cn } from './lib/utils';
-
-// Error Boundary Component
-class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean, error: Error | null }> {
-  constructor(props: { children: ReactNode }) {
-    super(props);
-    this.state = { hasError: false, error: null };
-  }
-
-  static getDerivedStateFromError(error: Error) {
-    return { hasError: true, error };
-  }
-
-  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    console.error("Uncaught error:", error, errorInfo);
-  }
-
-  render() {
-    if (this.state.hasError) {
-      return (
-        <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
-          <div className="bg-white p-8 rounded-3xl shadow-xl max-w-md w-full border border-red-100 text-center">
-            <div className="w-16 h-16 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-6">
-              <AlertTriangle className="text-red-500 w-8 h-8" />
-            </div>
-            <h1 className="text-2xl font-bold text-slate-900 mb-2">Ops! Algo deu errado.</h1>
-            <p className="text-slate-500 mb-6">
-              Ocorreu um erro inesperado na aplicação. Tente recarregar a página.
-            </p>
-            <pre className="bg-slate-50 p-4 rounded-xl text-xs text-red-600 overflow-auto text-left mb-6 max-h-40">
-              {this.state.error?.message}
-            </pre>
-            <button 
-              onClick={() => window.location.reload()}
-              className="w-full bg-slate-900 text-white py-3 rounded-xl font-medium hover:bg-slate-800 transition-colors"
-            >
-              Recarregar Página
-            </button>
-          </div>
-        </div>
-      );
-    }
-
-    return this.props.children;
-  }
-}
+import Konva from 'konva';
 
 const SYSTEM_INSTRUCTION = `Você é a "Motiva", uma assistente de produtividade extremamente engraçada, sarcástica e motivadora. 
 Sua voz deve soar feminina e cheia de energia. 
-Seu objetivo é ajudar o usuário a criar tarefas no canvas. 
+Seu objetivo é ajudar o usuário a criar tarefas. 
 Quando o usuário pedir para criar uma tarefa, você DEVE usar a ferramenta 'create_task'.
 Seja criativa nas respostas! Se ele pedir algo de 20 minutos, diga algo como "20 minutos? Dá pra salvar o mundo ou pelo menos lavar a louça, vamos lá campeão!".
 Sempre fale em Português do Brasil.`;
 
-function MotivaApp() {
+export default function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [isConnected, setIsConnected] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
-  const [zoom, setZoom] = useState(1);
-  const [pan, setPan] = useState({ x: 0, y: 0 });
   const audioService = useRef(new AudioService());
   const sessionRef = useRef<any>(null);
-  const canvasRef = useRef<HTMLDivElement>(null);
+
+  const [stageScale, setStageScale] = useState(1);
+  const [stageX, setStageX] = useState(0);
+  const [stageY, setStageY] = useState(0);
+  const stageRef = useRef<Konva.Stage>(null);
+
+  const handleWheel = (e: Konva.KonvaEventObject<WheelEvent>) => {
+    e.evt.preventDefault();
+    const stage = stageRef.current;
+    if (!stage) return;
+
+    const oldScale = stage.scaleX();
+    const pointer = stage.getPointerPosition();
+
+    if (!pointer) return;
+
+    const mousePointTo = {
+      x: (pointer.x - stage.x()) / oldScale,
+      y: (pointer.y - stage.y()) / oldScale,
+    };
+
+    const newScale = e.evt.deltaY > 0 ? oldScale * 0.9 : oldScale * 1.1;
+
+    setStageScale(newScale);
+    setStageX(pointer.x - mousePointTo.x * newScale);
+    setStageY(pointer.y - mousePointTo.y * newScale);
+  };
 
   const addTask = useCallback((title: string, duration: number) => {
     const newTask: Task = {
@@ -107,27 +65,29 @@ function MotivaApp() {
       title,
       duration,
       createdAt: Date.now(),
-      x: window.innerWidth / 2 - 150 - pan.x,
-      y: window.innerHeight / 2 - 100 - pan.y,
+      x: Math.random() * (window.innerWidth - 300), // Random position on canvas
+      y: Math.random() * (window.innerHeight - 200),
     };
-    setTasks(prev => [...prev, newTask]);
-  }, [pan]);
-
-  const updateTaskPos = (id: string, x: number, y: number) => {
-    setTasks(prev => prev.map(t => t.id === id ? { ...t, x, y } : t));
-  };
+    setTasks(prev => [newTask, ...prev]);
+  }, []);
 
   const removeTask = (id: string) => {
     setTasks(prev => prev.filter(t => t.id !== id));
   };
 
+  const handleDragEnd = (e: Konva.KonvaEventObject<DragEvent>, id: string) => {
+    const updatedTasks = tasks.map(task => {
+      if (task.id === id) {
+        return { ...task, x: e.target.x(), y: e.target.y() };
+      }
+      return task;
+    });
+    setTasks(updatedTasks);
+  };
+
   const connectLive = async () => {
     if (isConnected) {
-      try {
-        sessionRef.current?.close();
-      } catch (e) {
-        console.warn("Error closing session:", e);
-      }
+      sessionRef.current?.close();
       audioService.current.stop();
       setIsConnected(false);
       return;
@@ -135,19 +95,14 @@ function MotivaApp() {
 
     setIsConnecting(true);
     try {
-      const apiKey = process.env.GEMINI_API_KEY;
-      if (!apiKey) {
-        throw new Error("GEMINI_API_KEY não encontrada no ambiente.");
-      }
-
-      const ai = new GoogleGenAI({ apiKey });
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
       
       const session = await ai.live.connect({
         model: "gemini-2.5-flash-native-audio-preview-09-2025",
         config: {
           responseModalities: [Modality.AUDIO],
           speechConfig: {
-            voiceConfig: { prebuiltVoiceConfig: { voiceName: "Zephyr" } },
+            voiceConfig: { prebuiltVoiceConfig: { voiceName: "Zephyr" } }, // Zephyr sounds energetic
           },
           systemInstruction: SYSTEM_INSTRUCTION,
           tools: [{
@@ -170,15 +125,9 @@ function MotivaApp() {
             setIsConnected(true);
             setIsConnecting(false);
             audioService.current.start((base64) => {
-              if (sessionRef.current) {
-                sessionRef.current.sendRealtimeInput({
-                  media: { data: base64, mimeType: 'audio/pcm;rate=16000' }
-                });
-              }
-            }).catch(err => {
-              console.error("Microphone error:", err);
-              setIsConnected(false);
-              setIsConnecting(false);
+              session.sendRealtimeInput({
+                media: { data: base64, mimeType: 'audio/pcm;rate=16000' }
+              });
             });
           },
           onmessage: async (message) => {
@@ -205,6 +154,10 @@ function MotivaApp() {
                 }
               }
             }
+
+            if (message.serverContent?.interrupted) {
+              // Handle interruption if needed
+            }
           },
           onclose: () => {
             setIsConnected(false);
@@ -222,209 +175,169 @@ function MotivaApp() {
     } catch (error) {
       console.error("Connection failed:", error);
       setIsConnecting(false);
-      alert("Falha ao conectar com a IA. Verifique seu microfone e conexão.");
     }
   };
 
   return (
-    <div className="relative w-screen h-screen bg-[#FDFCFB] overflow-hidden flex">
-      {/* Sidebar */}
-      <aside className="w-[60px] h-full bg-[#333] flex flex-col items-center py-4 gap-4 z-50">
-        <div className="w-10 h-10 bg-slate-600 rounded-lg flex items-center justify-center text-white cursor-pointer hover:bg-slate-500 transition-colors">
-          <Square className="w-5 h-5" />
-        </div>
-        <div className="w-10 h-10 bg-[#9333ea] rounded-lg flex items-center justify-center text-white cursor-pointer hover:opacity-90 transition-opacity">
-          <MessageSquare className="w-5 h-5" />
-        </div>
-        <div className="w-10 h-10 bg-slate-600 rounded-lg flex items-center justify-center text-white cursor-pointer hover:bg-slate-500 transition-colors">
-          <List className="w-5 h-5" />
-        </div>
-        <div className="w-10 h-10 bg-[#10b981] rounded-lg flex items-center justify-center text-white cursor-pointer hover:opacity-90 transition-opacity">
-          <Calendar className="w-5 h-5" />
-        </div>
-        <div className="mt-auto flex flex-col gap-4">
-          <div className="w-10 h-10 bg-[#2563eb] rounded-lg flex items-center justify-center text-white cursor-pointer">
-            <LogOut className="w-5 h-5 rotate-180" />
+    <div className="min-h-screen bg-[#FDFCFB] selection:bg-orange-100 flex flex-col">
+      {/* Header */}
+      <header className="fixed top-0 left-0 right-0 z-50 bg-white/80 backdrop-blur-md border-bottom border-slate-100">
+        <div className="max-w-5xl mx-auto px-6 h-20 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-orange-500 rounded-xl flex items-center justify-center shadow-lg shadow-orange-200">
+              <Sparkles className="text-white w-6 h-6" />
+            </div>
+            <h1 className="font-display text-2xl font-bold tracking-tight text-slate-900">
+              Motiva<span className="text-orange-500">Task</span>
+            </h1>
           </div>
-          <div className="w-10 h-10 bg-white rounded-lg flex items-center justify-center text-slate-900 cursor-pointer">
-            <Calendar className="w-5 h-5" />
-          </div>
-          <div className="w-10 h-10 bg-slate-800 rounded-lg flex items-center justify-center text-white cursor-pointer">
-            <List className="w-5 h-5" />
-          </div>
-          <div className="w-10 h-10 bg-slate-800 rounded-lg flex items-center justify-center text-white cursor-pointer">
-            <Settings className="w-5 h-5" />
-          </div>
-          <div className="w-10 h-10 bg-[#9333ea] rounded-lg flex items-center justify-center text-white cursor-pointer">
-            <User className="w-5 h-5" />
-          </div>
-        </div>
-      </aside>
 
-      {/* Main Canvas Area */}
-      <div className="flex-1 relative overflow-hidden">
-        {/* Top Search Bar */}
-        <div className="absolute top-6 left-1/2 -translate-x-1/2 z-40 w-full max-w-md">
-          <div className="bg-white rounded-full shadow-lg border border-slate-100 flex items-center px-6 py-3">
-            <input 
-              type="text" 
-              placeholder="Buscar por tags ou título..." 
-              className="flex-1 bg-transparent border-none outline-none text-slate-600 placeholder:text-slate-400"
-            />
-          </div>
+          <button
+            onClick={connectLive}
+            disabled={isConnecting}
+            className={cn(
+              "relative flex items-center gap-3 px-6 py-3 rounded-full font-medium transition-all duration-300 shadow-sm",
+              isConnected 
+                ? "bg-red-50 text-red-600 hover:bg-red-100 border border-red-200" 
+                : "bg-slate-900 text-white hover:bg-slate-800"
+            )}
+          >
+            {isConnecting ? (
+              <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+            ) : isConnected ? (
+              <MicOff className="w-5 h-5" />
+            ) : (
+              <Mic className="w-5 h-5" />
+            )}
+            <span>{isConnecting ? "Conectando..." : isConnected ? "Parar Conversa" : "Falar com a Motiva"}</span>
+            
+            {isConnected && (
+              <span className="absolute -top-1 -right-1 flex h-3 w-3">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-3 w-3 bg-red-500"></span>
+              </span>
+            )}
+          </button>
         </div>
+      </header>
 
-        {/* Floating Toolbar */}
-        <div className="absolute top-24 left-1/2 -translate-x-1/2 z-40">
-          <div className="bg-white rounded-xl shadow-lg border border-slate-100 flex items-center gap-1 p-1">
-            {[Settings, Tag, Palette, Pencil, FileText, Calendar, Monitor, Mic, Circle, Video, Layout, Trash2].map((Icon, i) => (
-              <button 
-                key={i}
-                onClick={Icon === Mic ? connectLive : undefined}
-                className={cn(
-                  "p-2 rounded-lg hover:bg-slate-50 transition-colors",
-                  Icon === Mic && isConnected && "text-red-500 bg-red-50",
-                  Icon === Mic && isConnecting && "animate-pulse"
-                )}
-              >
-                <Icon className="w-5 h-5 text-slate-400" />
-              </button>
-            ))}
-          </div>
-        </div>
 
-        {/* Canvas */}
-        <motion.div 
-          ref={canvasRef}
-          drag
-          dragConstraints={{ left: -2000, right: 2000, top: -2000, bottom: 2000 }}
-          onDrag={(e, info) => setPan({ x: info.point.x, y: info.point.y })}
-          className="absolute inset-0 canvas-grid cursor-grab active:cursor-grabbing"
-          style={{ 
-            x: pan.x, 
-            y: pan.y,
-            scale: zoom
-          }}
+
+      <main className="flex-1 relative">
+        <Stage
+          width={window.innerWidth}
+          height={window.innerHeight}
+          onWheel={handleWheel}
+          scaleX={stageScale}
+          scaleY={stageScale}
+          x={stageX}
+          y={stageY}
+          ref={stageRef}
         >
-          <AnimatePresence>
+          <Layer>
             {tasks.map((task) => (
-              <motion.div
+              <Group
                 key={task.id}
-                drag
-                dragMomentum={false}
-                onDragEnd={(e, info) => updateTaskPos(task.id, task.x + info.offset.x, task.y + info.offset.y)}
-                initial={{ opacity: 0, scale: 0.8 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.8 }}
-                className={cn(
-                  "absolute w-[300px] bg-white rounded-2xl shadow-xl border-2 transition-colors cursor-default",
-                  task.duration === 5 ? "border-yellow-400" : "border-slate-100"
-                )}
-                style={{ left: task.x, top: task.y }}
+                x={task.x}
+                y={task.y}
+                draggable
+                onDragEnd={(e) => handleDragEnd(e, task.id)}
               >
-                {/* Card Header */}
-                <div className="px-4 py-3 flex items-center justify-between border-b border-slate-50">
-                  <div className="flex items-center gap-2">
-                    <span className="text-[10px] font-mono font-bold text-slate-400 bg-slate-50 px-2 py-0.5 rounded">
-                      {String(Math.floor(task.duration)).padStart(2, '0')}:00
-                    </span>
-                    {task.duration === 5 && (
-                      <span className="text-[10px] font-mono font-bold text-red-500 bg-red-50 px-2 py-0.5 rounded flex items-center gap-1">
-                        <Circle className="w-2 h-2 fill-current" /> +00:03
-                      </span>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Share2 className="w-3 h-3 text-slate-300" />
-                    <Maximize2 className="w-3 h-3 text-slate-300" />
-                  </div>
-                </div>
-
-                {/* Card Body */}
-                <div className="p-4 min-h-[150px]">
-                  <h3 className="text-lg font-display font-bold text-slate-800 mb-2">
-                    {task.title}
-                  </h3>
-                  <p className="text-slate-400 text-sm italic">
-                    Digite algo aqui...
-                  </p>
-                </div>
-
-                {/* Card Footer */}
-                <div className="absolute bottom-4 right-4">
-                  <Plus className="w-4 h-4 text-slate-200" />
-                </div>
-              </motion.div>
+                <Rect
+                  width={300}
+                  height={150}
+                  fill="white"
+                  cornerRadius={12}
+                  shadowBlur={10}
+                  shadowOpacity={0.1}
+                  stroke="#e2e8f0"
+                  strokeWidth={1}
+                />
+                <Text
+                  text={task.title}
+                  x={20}
+                  y={20}
+                  width={260}
+                  fontSize={18}
+                  fill="#1e293b"
+                  fontFamily="Space Grotesk"
+                  fontStyle="bold"
+                />
+                <Text
+                  text={`${task.duration} minutos`}
+                  x={20}
+                  y={80}
+                  fontSize={14}
+                  fill="#64748b"
+                  fontFamily="Inter"
+                />
+                <Text
+                  text={new Date(task.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  x={20}
+                  y={110}
+                  fontSize={10}
+                  fill="#94a3b8"
+                  fontFamily="JetBrains Mono"
+                />
+                <Rect
+                  x={270}
+                  y={10}
+                  width={20}
+                  height={20}
+                  fill="#ef4444"
+                  cornerRadius={4}
+                  onClick={() => removeTask(task.id)}
+                />
+                <Text
+                  text="X"
+                  x={276}
+                  y={13}
+                  fontSize={12}
+                  fill="white"
+                  fontFamily="Inter"
+                  listening={false}
+                />
+              </Group>
             ))}
-          </AnimatePresence>
-        </motion.div>
-
-        {/* Bottom Toolbar */}
-        <div className="absolute bottom-8 left-1/2 -translate-x-1/2 z-40">
-          <div className="bg-white/90 backdrop-blur rounded-full shadow-lg border border-slate-100 flex items-center gap-4 px-6 py-3">
-            <div className="flex items-center gap-2 pr-4 border-r border-slate-100">
-              <CheckCircle2 className="w-5 h-5 text-emerald-500" />
-              <span className="text-xs font-bold text-slate-400">0</span>
-            </div>
-            <div className="flex items-center gap-2 pr-4 border-r border-slate-100">
-              <CheckCircle2 className="w-5 h-5 text-emerald-400" />
-              <span className="text-xs font-bold text-slate-400">0</span>
-            </div>
-            <div className="flex items-center gap-2 pr-4 border-r border-slate-100">
-              <AlertCircle className="w-5 h-5 text-orange-400" />
-              <span className="text-xs font-bold text-slate-400">0</span>
-            </div>
-            <div className="flex items-center gap-4">
-              <Volume2 className="w-5 h-5 text-slate-300" />
-              <Trash2 className="w-5 h-5 text-red-400" />
-              <div className="w-8 h-8 bg-blue-50 rounded-lg flex items-center justify-center">
-                <ChevronRight className="w-5 h-5 text-blue-500" />
+            {isConnected && tasks.length === 0 && (
+              <Text
+                text="A Motiva está ouvindo... peça uma tarefa!"
+                x={window.innerWidth / 2 - 150}
+                y={window.innerHeight / 2 - 20}
+                fontSize={20}
+                fill="#94a3b8"
+                fontFamily="Inter"
+                align="center"
+                width={300}
+              />
+            )}
+          </Layer>
+        </Stage>
+      </main>
+      <AnimatePresence>
+        {isConnected && (
+          <motion.div
+            initial={{ y: 100, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: 100, opacity: 0 }}
+            className="fixed bottom-8 left-1/2 -translate-x-1/2 z-50"
+          >
+            <div className="bg-slate-900 text-white px-6 py-4 rounded-2xl shadow-2xl flex items-center gap-4 border border-white/10">
+              <div className="flex gap-1">
+                {[1, 2, 3, 4].map((i) => (
+                  <motion.div
+                    key={i}
+                    animate={{ height: [8, 16, 8] }}
+                    transition={{ repeat: Infinity, duration: 0.6, delay: i * 0.1 }}
+                    className="w-1 bg-orange-500 rounded-full"
+                  />
+                ))}
               </div>
-              <Clock className="w-5 h-5 text-yellow-500" />
-              <Sparkles className="w-5 h-5 text-orange-400" />
+              <span className="text-sm font-medium">Conversa Ativa com Motiva</span>
             </div>
-          </div>
-        </div>
-
-        {/* Zoom Controls */}
-        <div className="absolute bottom-8 left-8 z-40 flex flex-col gap-2">
-          <button 
-            onClick={() => setZoom(z => Math.min(z + 0.1, 2))}
-            className="w-10 h-10 bg-white rounded-xl shadow-lg border border-slate-100 flex items-center justify-center text-slate-400 hover:text-slate-600"
-          >
-            <ZoomIn className="w-5 h-5" />
-          </button>
-          <div className="bg-white px-2 py-1 rounded-lg shadow-lg border border-slate-100 text-[10px] font-bold text-slate-400 text-center">
-            {Math.round(zoom * 100)}%
-          </div>
-          <button 
-            onClick={() => setZoom(z => Math.max(z - 0.1, 0.5))}
-            className="w-10 h-10 bg-white rounded-xl shadow-lg border border-slate-100 flex items-center justify-center text-slate-400 hover:text-slate-600"
-          >
-            <ZoomOut className="w-5 h-5" />
-          </button>
-        </div>
-
-        {/* Fullscreen Toggle */}
-        <div className="absolute bottom-8 right-8 z-40">
-          <button className="w-10 h-10 bg-white rounded-xl shadow-lg border border-slate-100 flex items-center justify-center text-slate-400 hover:text-slate-600">
-            <Maximize2 className="w-5 h-5" />
-          </button>
-        </div>
-
-        {/* Helper Text */}
-        <div className="absolute bottom-2 right-1/2 translate-x-1/2 text-[10px] text-slate-400 font-medium whitespace-nowrap">
-          Click the circle node to connect cards • Double-click card to edit • Scroll to Zoom
-        </div>
-      </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
-  );
-}
-
-export default function App() {
-  return (
-    <ErrorBoundary>
-      <MotivaApp />
-    </ErrorBoundary>
   );
 }
