@@ -19,6 +19,7 @@ import { AudioService } from './services/audioService';
 import { cn } from './lib/utils';
 import Konva from 'konva';
 import ChatWindow from './components/ChatWindow';
+import ApiKeyInput from './components/ApiKeyInput';
 
 const SYSTEM_INSTRUCTION = `Você é a "Motiva", uma assistente de produtividade extremamente engraçada, sarcástica e motivadora. 
 Sua voz deve soar feminina e cheia de energia. 
@@ -39,6 +40,7 @@ export default function App() {
   const [stageY, setStageY] = useState(0);
   const stageRef = useRef<Konva.Stage>(null);
   const [isChatOpen, setIsChatOpen] = useState(false);
+  const [userApiKey, setUserApiKey] = useState<string | null>(null);
 
   const handleWheel = (e: Konva.KonvaEventObject<WheelEvent>) => {
     e.evt.preventDefault();
@@ -98,7 +100,7 @@ export default function App() {
 
     setIsConnecting(true);
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+      const ai = new GoogleGenAI({ apiKey: userApiKey || process.env.GEMINI_API_KEY! });
       
       const session = await ai.live.connect({
         model: "gemini-2.5-flash-native-audio-preview-09-2025",
@@ -231,6 +233,8 @@ export default function App() {
           </button>
         </div>
       </header>
+
+      <ApiKeyInput onApiKeyChange={setUserApiKey} />
 
 
 
