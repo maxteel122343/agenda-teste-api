@@ -10,9 +10,11 @@ import {
   CheckCircle2,
   Volume2,
   AlertCircle,
-  MessageSquare
+  MessageSquare,
+  LayoutDashboard, // Icon for Canvas View
+  CalendarDays // Icon for Calendar View
 } from 'lucide-react';
-import { Stage, Layer, Rect, Text, Group } from 'react-konva';
+import { Stage, Layer, Rect, Text, Group, Line, Wedge } from 'react-konva';
 import { GoogleGenAI, Modality, Type } from "@google/genai";
 import { Task } from './types';
 import { AudioService } from './services/audioService';
@@ -20,11 +22,19 @@ import { cn } from './lib/utils';
 import Konva from 'konva';
 import ChatWindow from './components/ChatWindow';
 import ApiKeyInput from './components/ApiKeyInput';
+import CalendarView from './components/CalendarView';
+import EditTaskModal from './components/EditTaskModal';
 
 const SYSTEM_INSTRUCTION = `Você é a "Motiva", uma assistente de produtividade extremamente engraçada, sarcástica e motivadora. 
 Sua voz deve soar feminina e cheia de energia. 
-Seu objetivo é ajudar o usuário a criar tarefas. 
-Quando o usuário pedir para criar uma tarefa, você DEVE usar a ferramenta 'create_task'.
+Seu objetivo é ajudar o usuário a criar e agendar tarefas. 
+Quando o usuário pedir para criar uma ou mais tarefas, você DEVE usar a ferramenta 'create_task'.
+
+Exemplos de como o usuário pode pedir:
+- "Crie 5 tarefas de 30 minutos para estudar, diariamente por 5 dias a partir de amanhã."
+- "Agende 3 sessões de academia de 60 minutos, semanalmente, começando na próxima segunda."
+- "Crie uma tarefa de 20 minutos para lavar a louça."
+
 Seja criativa nas respostas! Se ele pedir algo de 20 minutos, diga algo como "20 minutos? Dá pra salvar o mundo ou pelo menos lavar a louça, vamos lá campeão!".
 Sempre fale em Português do Brasil.`;
 
@@ -41,6 +51,55 @@ export default function App() {
   const stageRef = useRef<Konva.Stage>(null);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [userApiKey, setUserApiKey] = useState<string | null>(null);
+  const [isCanvasView, setIsCanvasView] = useState(true); // New state for view toggle
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [taskToEdit, setTaskToEdit] = useState<Task | null>(null);
+  const [runningTimers, setRunningTimers] = useState<Record<string, number>>({}); // taskId -> remainingTime/elapsedTime
+
+  const playSound = useCallback((soundUrl: string) => {
+    try {
+      const audio = new Audio(soundUrl);
+      audio.play();
+    } catch (error) {
+      console.error("Erro ao tocar som:", error);
+    }
+  }, []);
+
+  useEffect(() => {
+    const intervals: Record<string, NodeJS.Timeout> = {};
+
+    tasks.forEach(task => {
+      if (task.timerType && task.timerType !== 'none' && task.timerDuration !== undefined) {
+        if (runningTimers[task.id] === undefined) {
+          // Initialize timer
+          setRunningTimers(prev => ({ ...prev, [task.id]: task.timerType === 'countdown' ? task.timerDuration * 60 : 0 }));
+        }
+
+        intervals[task.id] = setInterval(() => {
+          setRunningTimers(prev => {
+            const currentTime = prev[task.id];
+            if (task.timerType === 'countdown') {
+              if (currentTime <= 1) {
+                clearInterval(intervals[task.id]);
+                if (task.soundEffect) {
+                  playSound(task.soundEffect);
+                }
+                // Optionally, mark task as complete or remove it
+                return { ...prev, [task.id]: 0 };
+              }
+              return { ...prev, [task.id]: currentTime - 1 };
+            } else { // stopwatch
+              return { ...prev, [task.id]: currentTime + 1 };
+            }
+          });
+        }, 1000); // Update every second
+      }
+    });
+
+    return () => {
+      Object.values(intervals).forEach(clearInterval);
+    };
+  }, [tasks, playSound, runningTimers]);
 
   const handleWheel = (e: Konva.KonvaEventObject<WheelEvent>) => {
     e.evt.preventDefault();
@@ -64,31 +123,111 @@ export default function App() {
     setStageY(pointer.y - mousePointTo.y * newScale);
   };
 
-  const addTask = useCallback((title: string, duration: number) => {
-    const newTask: Task = {
-      id: Math.random().toString(36).substr(2, 9),
-      title,
-      duration,
-      createdAt: Date.now(),
-      x: Math.random() * (window.innerWidth - 300), // Random position on canvas
-      y: Math.random() * (window.innerHeight - 200),
-    };
-    setTasks(prev => [newTask, ...prev]);
+  const addTask = useCallback((title: string, duration: number, quantity: number = 1, dueDate?: number, recurrence?: 'daily' | 'weekly' | 'monthly' | 'none') => {
+    const newTasks: Task[] = [];
+    let currentDueDate = dueDate ? new Date(dueDate) : new Date();
+
+    for (let i = 0; i < quantity; i++) {
+      const newTask: Task = {
+        id: Math.random().toString(36).substr(2, 9),
+        title,
+        duration,
+        createdAt: Date.now(),
+        x: Math.random() * (window.innerWidth - 300),
+        y: Math.random() * (window.innerHeight - 200),
+        dueDate: currentDueDate.getTime(),
+        recurrence: recurrence || 'none',
+      };
+      newTasks.push(newTask);
+
+      // Calculate next due date based on recurrence
+      if (recurrence === 'daily') {
+        currentDueDate.setDate(currentDueDate.getDate() + 1);
+      } else if (recurrence === 'weekly') {
+        currentDueDate.setDate(currentDueDate.getDate() + 7);
+      } else if (recurrence === 'monthly') {
+        currentDueDate.setMonth(currentDueDate.getMonth() + 1);
+      }
+    }
+    setTasks(prev => [...newTasks, ...prev]);
   }, []);
 
   const removeTask = (id: string) => {
     setTasks(prev => prev.filter(t => t.id !== id));
   };
 
+  const updateTask = useCallback((updatedTask: Task) => {
+    setTasks(prev => prev.map(task => (task.id === updatedTask.id ? updatedTask : task)));
+  }, []);
+
   const handleDragEnd = (e: Konva.KonvaEventObject<DragEvent>, id: string) => {
+    const draggedNode = e.target;
+    const draggedTask = tasks.find(task => task.id === id);
+    if (!draggedTask) return;
+
     const updatedTasks = tasks.map(task => {
       if (task.id === id) {
-        return { ...task, x: e.target.x(), y: e.target.y() };
+        // Check for collision with other tasks to establish parent-child relationship
+        let newParentId: string | undefined = undefined;
+        tasks.forEach(otherTask => {
+          if (otherTask.id !== id && otherTask.id !== draggedTask.parentId) { // Avoid self-parenting and re-parenting to current parent
+            const otherNode = stageRef.current?.findOne(`#${otherTask.id}`);
+            if (otherNode && draggedNode.intersects(otherNode)) {
+              newParentId = otherTask.id;
+            }
+          }
+        });
+        return { ...task, x: draggedNode.x(), y: draggedNode.y(), parentId: newParentId };
       }
       return task;
     });
     setTasks(updatedTasks);
   };
+
+  const createEmptyTask = useCallback(() => {
+    const newTask: Task = {
+      id: Math.random().toString(36).substr(2, 9),
+      title: "Nova Tarefa",
+      duration: 30,
+      createdAt: Date.now(),
+      x: Math.random() * (window.innerWidth - 300),
+      y: Math.random() * (window.innerHeight - 200),
+      recurrence: 'none',
+      notes: [], // Initialize with empty notes array
+    };
+    setTasks(prev => [...prev, newTask]);
+  }, []);
+
+  const addNoteToTask = useCallback((taskId: string) => {
+    setTasks(prevTasks => prevTasks.map(task => {
+      if (task.id === taskId) {
+        const newNote = {
+          id: Math.random().toString(36).substr(2, 9),
+          content: "Nova Nota",
+          x: 20,
+          y: task.height ? task.height - 40 : 110, // Position inside the card, adjust if card height is dynamic
+          width: 260,
+          height: 30,
+        };
+        return { ...task, notes: [...(task.notes || []), newNote] };
+      }
+      return task;
+    }));
+  }, []);
+
+  const updateNotePosition = useCallback((taskId: string, noteId: string, newX: number, newY: number) => {
+    setTasks(prevTasks => prevTasks.map(task => {
+      if (task.id === taskId) {
+        return {
+          ...task,
+          notes: task.notes?.map(note =>
+            note.id === noteId ? { ...note, x: newX, y: newY } : note
+          ),
+        };
+      }
+      return task;
+    }));
+  }, []);
 
   const connectLive = async () => {
     if (isConnected) {
@@ -113,12 +252,15 @@ export default function App() {
           tools: [{
             functionDeclarations: [{
               name: "create_task",
-              description: "Cria um novo card de tarefa com título e duração.",
+              description: "Cria um ou mais cards de tarefa com título, duração, quantidade, data de vencimento e recorrência.",
               parameters: {
                 type: Type.OBJECT,
                 properties: {
                   title: { type: Type.STRING, description: "O título ou descrição da tarefa." },
-                  duration: { type: Type.NUMBER, description: "A duração da tarefa em minutos." }
+                  duration: { type: Type.NUMBER, description: "A duração da tarefa em minutos." },
+                  quantity: { type: Type.NUMBER, description: "A quantidade de tarefas a serem criadas. Padrão é 1 se não especificado." },
+                  dueDate: { type: Type.NUMBER, description: "Timestamp (em milissegundos) da data de vencimento da primeira tarefa. Opcional." },
+                  recurrence: { type: Type.STRING, enum: ['daily', 'weekly', 'monthly', 'none'], description: "Padrão de recorrência da tarefa. Opcional. 'daily', 'weekly', 'monthly' ou 'none'." }
                 },
                 required: ["title", "duration"]
               }
@@ -147,8 +289,8 @@ export default function App() {
             if (message.toolCall) {
               for (const call of message.toolCall.functionCalls) {
                 if (call.name === "create_task") {
-                  const { title, duration } = call.args as any;
-                  addTask(title, duration);
+                  const { title, duration, quantity, dueDate, recurrence } = call.args as any;
+                  addTask(title, duration, quantity, dueDate, recurrence);
                   session.sendToolResponse({
                     functionResponses: [{
                       name: "create_task",
@@ -225,11 +367,27 @@ export default function App() {
           </button>
 
           <button
+            onClick={() => setIsCanvasView(prev => !prev)}
+            className="relative flex items-center gap-3 px-6 py-3 rounded-full font-medium transition-all duration-300 shadow-sm bg-slate-900 text-white hover:bg-slate-800"
+          >
+            {isCanvasView ? <CalendarDays className="w-5 h-5" /> : <LayoutDashboard className="w-5 h-5" />}
+            <span>{isCanvasView ? "Ver Calendário" : "Ver Canvas"}</span>
+          </button>
+
+          <button
             onClick={() => setIsChatOpen(true)}
             className="relative flex items-center gap-3 px-6 py-3 rounded-full font-medium transition-all duration-300 shadow-sm bg-slate-900 text-white hover:bg-slate-800"
           >
             <MessageSquare className="w-5 h-5" />
             <span>Chat</span>
+          </button>
+
+          <button
+            onClick={createEmptyTask}
+            className="relative flex items-center gap-3 px-6 py-3 rounded-full font-medium transition-all duration-300 shadow-sm bg-orange-500 text-white hover:bg-orange-600"
+          >
+            <Plus className="w-5 h-5" />
+            <span>Novo Card</span>
           </button>
         </div>
       </header>
@@ -239,95 +397,256 @@ export default function App() {
 
 
       <main className="flex-1 relative">
-        <Stage
-          width={window.innerWidth}
-          height={window.innerHeight}
-          onWheel={handleWheel}
-          scaleX={stageScale}
-          scaleY={stageScale}
-          x={stageX}
-          y={stageY}
-          ref={stageRef}
-        >
-          <Layer>
-            {tasks.map((task) => (
-              <Group
-                key={task.id}
-                x={task.x}
-                y={task.y}
-                draggable
-                onDragEnd={(e) => handleDragEnd(e, task.id)}
-              >
-                <Rect
-                  width={300}
-                  height={150}
-                  fill="white"
-                  cornerRadius={12}
-                  shadowBlur={10}
-                  shadowOpacity={0.1}
-                  stroke="#e2e8f0"
-                  strokeWidth={1}
-                />
+        {isCanvasView ? (
+          <Stage
+            width={window.innerWidth}
+            height={window.innerHeight}
+            onWheel={handleWheel}
+            scaleX={stageScale}
+            scaleY={stageScale}
+            x={stageX}
+            y={stageY}
+            ref={stageRef}
+          >
+            <Layer>
+              {tasks.map((task) => (
+                <Group
+                  key={task.id}
+                  x={task.x}
+                  y={task.y}
+                  draggable
+                  onDragEnd={(e) => handleDragEnd(e, task.id)}
+                  onDblClick={() => {
+                    setTaskToEdit(task);
+                    setIsEditModalOpen(true);
+                  }}
+                  id={task.id} // Add ID to Group for easy lookup
+                >
+                  <Rect
+                    width={300}
+                    height={150}
+                    fill="white"
+                    cornerRadius={12}
+                    shadowBlur={10}
+                    shadowOpacity={0.1}
+                    stroke={task.dueDate && task.dueDate < Date.now() + 24 * 60 * 60 * 1000 ? "#ef4444" : "#e2e8f0"}
+                    strokeWidth={1}
+                  />
+                  {task.progress !== undefined && (
+                    <Rect
+                      x={10}
+                      y={130}
+                      width={280}
+                      height={10}
+                      fill="#e2e8f0"
+                      cornerRadius={5}
+                    />
+                  )}
+                  {task.progress !== undefined && (
+                    <Rect
+                      x={10}
+                      y={130}
+                      width={280 * (task.progress / 100)}
+                      height={10}
+                      fill="#22c55e"
+                      cornerRadius={5}
+                    />
+                  )}
+                  {task.timerType === 'countdown' && task.timerDuration !== undefined && runningTimers[task.id] !== undefined && (
+                    <Wedge
+                      x={280}
+                      y={130}
+                      radius={15}
+                      angle={360 * (runningTimers[task.id] / (task.timerDuration * 60))}
+                      fill="#f97316"
+                      rotation={-90} // Start from top
+                    />
+                  )}
+                  <Text
+                    text={task.title}
+                    x={20}
+                    y={20}
+                    width={260}
+                    fontSize={18}
+                    fill="#1e293b"
+                    fontFamily="Space Grotesk"
+                    fontStyle="bold"
+                  />
+                  {task.progress !== undefined && (
+                    <Text
+                      text={`Progresso: ${task.progress}%`}
+                      x={20}
+                      y={45}
+                      fontSize={12}
+                      fill="#475569"
+                      fontFamily="Inter"
+                    />
+                  )}
+                  {task.timerType && task.timerType !== 'none' && (
+                    <Text
+                      text={`${task.timerType === 'countdown' ? 'Faltam' : 'Passaram'}: ${runningTimers[task.id] !== undefined ? Math.floor(runningTimers[task.id] / 60) : task.timerDuration || 0} min`}
+                      x={20}
+                      y={task.progress !== undefined ? 60 : 45} // Adjust y based on progress field
+                      fontSize={12}
+                      fill="#475569"
+                      fontFamily="Inter"
+                    />
+                  )}
+                  {task.soundEffect && (
+                    <Text
+                      text="🎵"
+                      x={270}
+                      y={105} // Adjusted y position
+                      fontSize={16}
+                      fill="#64748b"
+                      fontFamily="Inter"
+                    />
+                  )}
+                  <Text
+                    text={`${task.duration} minutos`}
+                    x={20}
+                    y={task.progress !== undefined || (task.timerType && task.timerType !== 'none') ? 80 : 60} // Adjust y based on other fields
+                    fontSize={14}
+                    fill="#64748b"
+                    fontFamily="Inter"
+                  />
+                  {task.dueDate && (
+                    <Text
+                      text={`Vence: ${new Date(task.dueDate).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' })}`}
+                      x={20}
+                      y={task.progress !== undefined || (task.timerType && task.timerType !== 'none') ? 95 : 80} // Adjusted y position
+                      fontSize={12}
+                      fill="#475569"
+                      fontFamily="Inter"
+                    />
+                  )}
+                  {task.recurrence && task.recurrence !== 'none' && (
+                    <Text
+                      text={`Repete: ${task.recurrence}`}
+                      x={20}
+                      y={task.progress !== undefined || (task.timerType && task.timerType !== 'none') || task.dueDate ? 110 : 95} // Adjusted y position
+                      fontSize={10}
+                      fill="#94a3b8"
+                      fontFamily="JetBrains Mono"
+                    />
+                  )}
+                  <Text
+                    text={new Date(task.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    x={20}
+                    y={task.progress !== undefined || (task.timerType && task.timerType !== 'none') || task.dueDate || task.recurrence ? 125 : 110} // Adjusted y position
+                    fontSize={10}
+                    fill="#94a3b8"
+                    fontFamily="JetBrains Mono"
+                  />
+                  <Rect
+                    x={270}
+                    y={10}
+                    width={20}
+                    height={20}
+                    fill="#ef4444"
+                    cornerRadius={4}
+                    onClick={() => removeTask(task.id)}
+                  />
+                  <Text
+                    text="X"
+                    x={276}
+                    y={13}
+                    fontSize={12}
+                    fill="white"
+                    fontFamily="Inter"
+                    listening={false}
+                  />
+                  <Rect
+                    x={10}
+                    y={10}
+                    width={20}
+                    height={20}
+                    fill="#22c55e"
+                    cornerRadius={4}
+                    onClick={() => addNoteToTask(task.id)}
+                  />
+                  <Text
+                    text="+"
+                    x={16}
+                    y={13}
+                    fontSize={12}
+                    fill="white"
+                    fontFamily="Inter"
+                    listening={false}
+                  />
+
+                  {/* Render Notes */}
+                  {task.notes?.map(note => (
+                    <Group
+                      key={note.id}
+                      x={note.x}
+                      y={note.y}
+                      draggable
+                      onDragEnd={(e) => updateNotePosition(task.id, note.id, e.target.x(), e.target.y())}
+                    >
+                      <Rect
+                        width={note.width}
+                        height={note.height}
+                        fill="#fffbe6" // Light yellow for notes
+                        cornerRadius={8}
+                        shadowBlur={5}
+                        shadowOpacity={0.05}
+                        stroke="#fcd34d" // Yellow border
+                        strokeWidth={1}
+                      />
+                      <Text
+                        text={note.content}
+                        x={10}
+                        y={10}
+                        width={note.width - 20}
+                        height={note.height - 20}
+                        fontSize={12}
+                        fill="#333"
+                        fontFamily="Inter"
+                        verticalAlign="middle"
+                      />
+                    </Group>
+                  ))}
+                </Group>
+              ))}
+              {tasks.map(task => {
+                if (task.parentId) {
+                  const parentTask = tasks.find(t => t.id === task.parentId);
+                  if (parentTask) {
+                    const startX = task.x + 150; // Center of child card
+                    const startY = task.y + 75; // Center of child card
+                    const endX = parentTask.x + 150; // Center of parent card
+                    const endY = parentTask.y + 75; // Center of parent card
+                    return (
+                      <Line
+                        key={`line-${task.id}`}
+                        points={[startX, startY, endX, endY]}
+                        stroke="#64748b"
+                        strokeWidth={2}
+                        tension={0.5}
+                      />
+                    );
+                  }
+                }
+                return null;
+              })}
+              {isConnected && tasks.length === 0 && (
                 <Text
-                  text={task.title}
-                  x={20}
-                  y={20}
-                  width={260}
-                  fontSize={18}
-                  fill="#1e293b"
-                  fontFamily="Space Grotesk"
-                  fontStyle="bold"
-                />
-                <Text
-                  text={`${task.duration} minutos`}
-                  x={20}
-                  y={80}
-                  fontSize={14}
-                  fill="#64748b"
-                  fontFamily="Inter"
-                />
-                <Text
-                  text={new Date(task.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                  x={20}
-                  y={110}
-                  fontSize={10}
+                  text="A Motiva está ouvindo... peça uma tarefa!"
+                  x={window.innerWidth / 2 - 150}
+                  y={window.innerHeight / 2 - 20}
+                  fontSize={20}
                   fill="#94a3b8"
-                  fontFamily="JetBrains Mono"
-                />
-                <Rect
-                  x={270}
-                  y={10}
-                  width={20}
-                  height={20}
-                  fill="#ef4444"
-                  cornerRadius={4}
-                  onClick={() => removeTask(task.id)}
-                />
-                <Text
-                  text="X"
-                  x={276}
-                  y={13}
-                  fontSize={12}
-                  fill="white"
                   fontFamily="Inter"
-                  listening={false}
+                  align="center"
+                  width={300}
                 />
-              </Group>
-            ))}
-            {isConnected && tasks.length === 0 && (
-              <Text
-                text="A Motiva está ouvindo... peça uma tarefa!"
-                x={window.innerWidth / 2 - 150}
-                y={window.innerHeight / 2 - 20}
-                fontSize={20}
-                fill="#94a3b8"
-                fontFamily="Inter"
-                align="center"
-                width={300}
-              />
-            )}
-          </Layer>
-        </Stage>
+              )}
+            </Layer>
+          </Stage>
+        ) : (
+          <CalendarView tasks={tasks} />
+        )}
       </main>
       <AnimatePresence>
         {isConnected && (
@@ -363,6 +682,13 @@ export default function App() {
           />
         )}
       </AnimatePresence>
+
+      <EditTaskModal
+        isOpen={isEditModalOpen}
+        onClose={() => setIsEditModalOpen(false)}
+        task={taskToEdit}
+        onSave={updateTask}
+      />
     </div>
   );
 }
